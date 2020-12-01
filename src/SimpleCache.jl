@@ -3,15 +3,25 @@ module SimpleCache
 import Serialization
 using InteractiveUtils
 
+export set_cache_path, Simple_Cache_Path, @cached
+
+Simple_Cache_Path = joinpath(".", "julia_simple_cache")
 
 if ! @isdefined macro_cache
     macro_cache = Dict()
 end
+
 # We need a data type that no method has a specialisation for. So we declare
 # CacheFakeStruct. Don't write a function that takes this as an argument
 struct CacheFakeStruct
 end
-function remove_certain_lines(src)
+
+function set_cache_path(path)
+    global Simple_Cache_Path
+    Simple_Cache_Path = path
+end
+
+function lowered_remove_certain_lines(src)
     ret = ""
     state = 0
     for line in split(src, "\n")
@@ -27,6 +37,26 @@ function remove_certain_lines(src)
     end
     return ret
 end
+
+function typed_remove_certain_lines(src)
+    ret = ""
+    state = 0
+    for line in split(src, "\n")
+        if endswith(line, "  = Base.CoreLogging.Debug::Core.Compiler.Const(Debug, false)")
+            state = 1
+        end
+        if state == 0
+            ret *= line * "\n"
+        end
+        if contains(line, "  Base.CoreLogging.logging_error(")
+            state = 0
+        end
+    end
+    #Base.CoreLogging.Debug::Core.Compiler.Const(Debug, false)
+    #  Base.CoreLogging.logging_error
+    return ret
+end
+
 function extract_arg_types(sig)
     str = string(sig)
     str = str[length("Tuple{")+1: end-1]
@@ -52,25 +82,31 @@ function extract_arg_types(sig)
         elseif type == Tuple
             val = (CacheFakeStruct(),CacheFakeStruct())
         else
-            @debug str
             val = Array{type}(undef)[1]
         end
         push!(vals, val)
     end
     vals
 end
+
 function get_ast_of_meth(meth)
     funcname = meth.name
     sig = meth.sig
     type_examples = extract_arg_types(sig)
-    inner_ast = @code_typed eval(funcname)(type_examples...)
+    inner_ast = @code_typed Main.eval(funcname)(type_examples...)
     return inner_ast
 end
+
 function hash_function_recursive(already_visited, ast, is_typed::Bool)
+    @debug ast
     if typeof(ast) == Array{Core.CodeInfo,1}
         return 0
     end
-    ret = hash(remove_certain_lines(string(ast)))
+    if is_typed
+        ret = hash(typed_remove_certain_lines(string(ast)))
+    else
+        ret = hash(lowered_remove_certain_lines(string(ast)))
+    end
     if ret in already_visited
         return 0
     end
@@ -83,6 +119,7 @@ function hash_function_recursive(already_visited, ast, is_typed::Bool)
             continue
         end
         if typeof(cmd) == GlobalRef
+            #@debug "GlobalRef:" cmd
             if cmd.mod == Main
                 ret = hash((ret, eval(cmd)))
             end
@@ -96,6 +133,7 @@ function hash_function_recursive(already_visited, ast, is_typed::Bool)
         end
 
         if hasfield(typeof(cmd), :head) && cmd.head == :call && typeof(cmd.args[1]) == GlobalRef && cmd.args[1].mod == Main
+            #@debug "call:" cmd.args[1]
             if length(cmd.args) == 1
                 func = @which eval(cmd.args[1])()
                 if is_typed
@@ -116,6 +154,7 @@ function hash_function_recursive(already_visited, ast, is_typed::Bool)
             end
         end
         if hasfield(typeof(cmd), :args)
+            #@debug "args:" cmd.args
             if length(cmd.args) == 0
                 continue
             end            
@@ -137,15 +176,15 @@ function hash_function_recursive(already_visited, ast, is_typed::Bool)
     end
     return ret
 end
+
 macro cache_function(longname)
-    cachedir = joinpath(ENV["HOME"], "julia_cache")
     func = Symbol(longname)
     @assert startswith(longname, "cached_")
     shortname = longname[length("cached_")+1:end]
     outer_func = Symbol(shortname)
     :(function $(esc(outer_func))(args...)
         depshash = hash((hash_function_recursive([], @code_typed($func(args...)), true), args ))
-        fp = joinpath($cachedir, string(depshash))
+        fp = joinpath($Simple_Cache_Path, string(depshash))
         if haskey(macro_cache, depshash)
             ret = macro_cache[depshash]
         elseif isfile(fp)
@@ -163,7 +202,12 @@ macro cache_function(longname)
         return ret
     end)
 end
+
 macro cached(func)
+    if !isdir(Simple_Cache_Path)
+        mkpath(Simple_Cache_Path)
+        println("Created directory SimpleCache.Cache_Path == ", string(Simple_Cache_Path))
+    end
     inner_func = "cached_" * string(func.args[1].args[1])
     func.args[1].args[1] = esc(Symbol(inner_func))
     return :(:block, $func, @cache_function($inner_func))
