@@ -1,0 +1,4 @@
+name = "SimpleCache"
+uuid = "535d1a1e-7fe7-4528-a7ba-13bd0fa9d36a"
+authors = ["Volker Weißmann <volker.weissmann@gmx.de>"]
+version = "0.1.0"
