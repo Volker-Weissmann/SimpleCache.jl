@@ -1,9 +1,8 @@
 module SimpleCache
-
 import Serialization
 using InteractiveUtils
 
-export set_cache_path, Simple_Cache_Path, @cached
+export set_cache_path, @cached
 
 Simple_Cache_Path = joinpath(".", "julia_simple_cache")
 
@@ -98,7 +97,7 @@ function get_ast_of_meth(meth)
 end
 
 function hash_function_recursive(already_visited, ast, is_typed::Bool)
-    @debug ast
+    #@debug ast
     if typeof(ast) == Array{Core.CodeInfo,1}
         return 0
     end
@@ -177,13 +176,13 @@ function hash_function_recursive(already_visited, ast, is_typed::Bool)
     return ret
 end
 
-macro cache_function(longname)
+function cache_function(longname)
     func = Symbol(longname)
     @assert startswith(longname, "cached_")
     shortname = longname[length("cached_")+1:end]
     outer_func = Symbol(shortname)
-    :(function $(esc(outer_func))(args...)
-        depshash = hash((hash_function_recursive([], @code_typed($func(args...)), true), args ))
+    ret = :(function $(esc(outer_func))(args...)
+        depshash = hash((hash_function_recursive([], @code_typed(Main.$func(args...)), true), args ))
         fp = joinpath($Simple_Cache_Path, string(depshash))
         if haskey(macro_cache, depshash)
             ret = macro_cache[depshash]
@@ -193,14 +192,15 @@ macro cache_function(longname)
             Base.close(cache)
             macro_cache[depshash] = ret
         else
-            ret = $func(args...)
+            ret = Main.$func(args...)
             cache = Base.open(fp, "w")
             Serialization.serialize(cache, ret)
             Base.close(cache)
             macro_cache[depshash] = ret
         end
         return ret
-    end)
+			end)
+	ret
 end
 
 macro cached(func)
@@ -209,8 +209,9 @@ macro cached(func)
         println("Created directory SimpleCache.Cache_Path == ", string(Simple_Cache_Path))
     end
     inner_func = "cached_" * string(func.args[1].args[1])
-    func.args[1].args[1] = esc(Symbol(inner_func))
-    return :(:block, $func, @cache_function($inner_func))
+    func.args[1].args[1] = Symbol(inner_func)
+	temp = cache_function(inner_func)
+    return :(:block, $(esc(func)) , $temp)
 end
 
 
