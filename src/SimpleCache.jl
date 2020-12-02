@@ -15,6 +15,10 @@ end
 struct CacheFakeStruct
 end
 
+"""
+If you call this function before running @cached, then the cache will be written into `path`.
+Otherwise, it defaults to `./julia_simple_cache`.
+"""
 function set_cache_path(path)
     global Simple_Cache_Path
     Simple_Cache_Path = path
